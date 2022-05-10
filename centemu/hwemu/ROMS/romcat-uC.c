@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <inttypes.h>
+#include <ctype.h>
 #include "../logic-common.h"
 #include "../clockline.h"
 #include "../ginsumatic.h"
@@ -20,7 +21,10 @@ typedef struct comment_t { word_t addr; char *comment; } comment_t;
 #include "comments_generated.h"
 
 // Remeove me when address bus works
-byte_t inject;
+// byte_t inject;
+uint8_t *code;
+size_t code_size;
+size_t code_pos;
 
 static uint8_t allrom[NUMROMS][ROMSIZE];
 static uint8_t mergedrom[ROMSIZE][NUMROMS];
@@ -392,7 +396,11 @@ void do_read_sources(cpu_state_t *st, uIW_trace_t *t) {
 					//st->Bus.iD=st->Reg.SDBRL;
 					st->Bus.iD=sysbus_read_data(st->Bus.Sys.ADDR);
 					st->Bus.iD=0x01; // Force NOP
-					st->Bus.iD=inject; // Force BL
+					// st->Bus.iD=inject; // Force BL
+                    if (code_pos < code_size) 
+                        st->Bus.iD = code[code_pos++];
+                    else 
+                        st->Bus.iD = code[code_pos-1];
 					deroach("Read 0x%02x from External Data Bus to iD-Bus\n", st->Bus.iD);
 					break;
 				case D_D3_3_READ_ILR:
@@ -834,6 +842,52 @@ void init_cpu_state(cpu_state_t *st) {
 }
 
 
+// FROM capstone ---
+// convert hexchar to hexnum
+static uint8_t char_to_hexnum(char c)
+{
+	if (c >= '0' && c <= '9') {
+		return (uint8_t)(c - '0');
+	}
+
+	if (c >= 'a' && c <= 'f') {
+		return (uint8_t)(10 + c - 'a');
+	}
+
+	//  c >= 'A' && c <= 'F'
+	return (uint8_t)(10 + c - 'A');
+}
+
+// FROM capstone ---
+// convert user input (char[]) to uint8_t[], each element of which is
+// valid hexadecimal, and return actual length of uint8_t[] in @size.
+static uint8_t *preprocess(char *code, size_t *size)
+{
+	size_t i = 0, j = 0;
+	uint8_t high, low;
+	uint8_t *result;
+
+	if (strlen(code) == 0)
+		return NULL;
+
+	result = (uint8_t *)malloc(strlen(code));
+	if (result != NULL) {
+		while (code[i] != '\0') {
+			if (isxdigit(code[i]) && isxdigit(code[i+1])) {
+				high = 16 * char_to_hexnum(code[i]);
+				low = char_to_hexnum(code[i+1]);
+				result[j] = high + low;
+				i++;
+				j++;
+			}
+			i++;
+		}
+		*size = j;
+	}
+
+	return result;
+}
+
 int main(int argc, char **argv) {
 	int r;
 	uint16_t tmp;
@@ -842,9 +896,15 @@ int main(int argc, char **argv) {
 	char binstr[100];
 	cpu_state_t cpu_st;
 	uIW_trace_t trace[ROMSIZE];
+
 	//Byte to force into sys data bus register
-	if(argc == 2) { inject=atoi(argv[1]); }
-	else { inject=0x01; }
+	// if (argc == 2) { inject=atoi(argv[1]); }
+	// else { inject=0x01; }
+
+	code = preprocess(argv[1], &code_size);
+	if (!code) {
+		return -1;
+	}
 
 	if( (r=read_roms()) == 0 ) {
 		merge_roms();
